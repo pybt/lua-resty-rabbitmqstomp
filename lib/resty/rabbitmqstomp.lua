@@ -14,11 +14,20 @@ local setmetatable = setmetatable
 local sub = string.sub
 local tcp = ngx.socket.tcp
 
-module(...)
-
 _VERSION = "0.1"
 
-local mt = { __index = _M }
+local _M = {}
+local _keys = {
+    state = true
+}
+local mt = {
+    __index = _M,
+    __newindex = function(table, key, val)
+        if not _keys[key] then
+            error('attempt to write to undeclared variable "' .. key .. '"')
+        end
+    end
+}
 
 local LF = "\x0a"
 local EOL = "\x0d\x0a"
@@ -26,23 +35,20 @@ local NULL_BYTE = "\x00"
 local STATE_CONNECTED = 1
 local STATE_COMMAND_SENT = 2
 
-
-function new(self, opts)
+function _M.new(self, opts)
     local sock, err = tcp()
     if not sock then
         return nil, err
     end
-    
-    if opts == nil then
-	opts = {username = "guest", password = "guest", vhost = "/", trailing_lf = true}
-    end
-     
-    return setmetatable({ sock = sock, opts = opts}, mt)
 
+    if opts == nil then
+        opts = {username = "guest", password = "guest", vhost = "/", trailing_lf = true}
+    end
+
+    return setmetatable({sock = sock, opts = opts}, mt)
 end
 
-
-function set_timeout(self, timeout)
+function _M.set_timeout(self, timeout)
     local sock = self.sock
     if not sock then
         return nil, "not initialized"
@@ -51,8 +57,7 @@ function set_timeout(self, timeout)
     return sock:settimeout(timeout)
 end
 
-
-function _build_frame(self, command, headers, body)
+local function _build_frame(self, command, headers, body)
     local frame = {command, EOL}
 
     if body then
@@ -77,8 +82,7 @@ function _build_frame(self, command, headers, body)
     return concat(frame, "")
 end
 
-
-function _send_frame(self, frame)
+local function _send_frame(self, frame)
     local sock = self.sock
     if not sock then
         return nil, "not initialized"
@@ -86,8 +90,7 @@ function _send_frame(self, frame)
     return sock:send(frame)
 end
 
-
-function _receive_frame(self)
+local function _receive_frame(self)
     local sock = self.sock
     if not sock then
         return nil, "not initialized"
@@ -102,9 +105,7 @@ function _receive_frame(self)
     return data, err
 end
 
-
-function _login(self)
-    
+local function _login(self)
     local headers = {}
     headers["accept-version"] = "1.2"
     headers["login"] = self.opts.username
@@ -122,7 +123,7 @@ function _login(self)
     end
 
     -- We successfully received a frame, but it was an ERROR frame
-    if sub( frame, 1, len( 'ERROR' ) ) == 'ERROR' then
+    if sub(frame, 1, len("ERROR")) == "ERROR" then
         return nil, frame
     end
 
@@ -130,11 +131,10 @@ function _login(self)
     return frame
 end
 
-
-function _logout(self)
+local function _logout(self)
     local sock = self.sock
     if not sock then
-	self.state = nil
+        self.state = nil
         return nil, "not initialized"
     end
 
@@ -149,9 +149,7 @@ function _logout(self)
     return sock:close()
 end
 
-
-function connect(self, ...)
-
+function _M.connect(self, ...)
     local sock = self.sock
 
     if not sock then
@@ -159,23 +157,21 @@ function connect(self, ...)
     end
 
     local ok, err = sock:connect(...)
-    
+
     if not ok then
         return nil, "failed to connect: " .. err
     end
-    
+
     local reused = sock:getreusedtimes()
     if reused and reused > 0 then
         self.state = STATE_CONNECTED
         return 1
     end
-    
-    return _login(self)
 
+    return _login(self)
 end
 
-
-function send(self, msg, headers)
+function _M.send(self, msg, headers)
     local ok, err = _send_frame(self, _build_frame(self, "SEND", headers, msg))
     if not ok then
         return nil, err
@@ -187,18 +183,15 @@ function send(self, msg, headers)
     return ok, err
 end
 
-
-function subscribe(self, headers)
+function _M.subscribe(self, headers)
     return _send_frame(self, _build_frame(self, "SUBSCRIBE", headers))
 end
 
-
-function unsubscribe(self, headers)
+function _M.unsubscribe(self, headers)
     return _send_frame(self, _build_frame(self, "UNSUBSCRIBE", headers))
 end
 
-
-function receive(self)
+function _M.receive(self)
     local data, err = _receive_frame(self)
     if not data then
         return nil, err
@@ -207,24 +200,21 @@ function receive(self)
     return sub(data, idx + 2)
 end
 
-
-function set_keepalive(self, ...)
+function _M.set_keepalive(self, ...)
     local sock = self.sock
     if not sock then
         return nil, "not initialized"
     end
 
     if self.state ~= STATE_CONNECTED then
-        return nil, "cannot be reused in the current connection state: "
-                    .. (self.state or "nil")
+        return nil, "cannot be reused in the current connection state: " .. (self.state or "nil")
     end
 
     self.state = nil
     return sock:setkeepalive(...)
 end
 
-
-function get_reused_times(self)
+function _M.get_reused_times(self)
     local sock = self.sock
     if not sock then
         return nil, "not initialized"
@@ -233,17 +223,8 @@ function get_reused_times(self)
     return sock:getreusedtimes()
 end
 
-
-function close(self)
+function _M.close(self)
     return _logout(self)
 end
 
-
-local class_mt = {
-    -- to prevent use of casual module global variables
-    __newindex = function (table, key, val)
-      error('attempt to write to undeclared variable "' .. key .. '"')
-    end
-}
-
-setmetatable(_M, class_mt)
+return _M
